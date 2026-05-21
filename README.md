@@ -7,7 +7,7 @@
 
 A payment processing API that guarantees exactly-once execution using idempotency keys. Built for **FinSafe Transactions Ltd.** to solve the double-charging problem caused by network retries, client timeouts, and accidental duplicate submissions.
 
-When a payment request is sent and the network drops before the response arrives, the client has no way of knowing whether the payment went through. Without an idempotency layer, retrying that request risks charging the customer twice. This gateway eliminates that risk entirely — no matter how many times the same request is replayed, the payment is processed exactly once and every subsequent attempt gets back the original response instantly.
+When a payment request is sent and the network drops before the response arrives, the client has no way of knowing whether the payment went through. Without an idempotency layer, retrying that request risks charging the customer twice. This gateway eliminates that risk entirely. No matter how many times the same request is replayed, the payment is processed exactly once and every subsequent attempt gets back the original response instantly.
 
 ---
 
@@ -31,9 +31,9 @@ When a payment request is sent and the network drops before the response arrives
 
 ## Overview
 
-FinSafe's clients — online shops, mobile apps, and partner services — occasionally experience network timeouts. When that happens, their systems automatically retry the failed request. Without protection, both the original and the retry get processed, resulting in a double charge.
+FinSafe's clients (online shops, mobile apps, and partner services) occasionally experience network timeouts. When that happens, their systems automatically retry the failed request. Without protection, both the original and the retry get processed, resulting in a double charge.
 
-This gateway sits in front of the payment processor and enforces a strict rule: **the same payment is never executed twice.** Every request must carry a system-generated `Idempotency-Key`. The gateway tracks the status of each key, stores the result of the first successful execution, and returns that stored result to every subsequent caller — without touching the payment processor again.
+This gateway sits in front of the payment processor and enforces a strict rule: **the same payment is never executed twice.** Every request must carry a system-generated `Idempotency-Key`. The gateway tracks the status of each key, stores the result of the first successful execution, and returns that stored result to every subsequent caller without touching the payment processor again.
 
 The implementation covers five distinct scenarios:
 
@@ -41,9 +41,9 @@ The implementation covers five distinct scenarios:
 |---|---|
 | First request | Payment is processed and the result is stored |
 | Duplicate request | Cached result is returned instantly with `X-Cache-Hit: true` |
-| Conflict | Same key used with a different body — rejected with 409 |
-| Race condition | Two identical requests arrive simultaneously — second one waits and gets the same result |
-| Rate limit | More than 10 requests per 60 seconds from one IP — rejected with 429 |
+| Conflict | Same key used with a different body, rejected with 409 |
+| Race condition | Two identical requests arrive simultaneously. The second one waits and gets the same result |
+| Rate limit | More than 10 requests per 60 seconds from one IP, rejected with 429 |
 
 ---
 
@@ -81,15 +81,15 @@ Shows every decision the gateway makes when a `POST /process-payment` request ar
 
 ## Features
 
-- **Exactly-once payment processing** — duplicate requests return the stored result without re-executing the payment
-- **System-generated idempotency keys** — clients must call `POST /generate-ticket` before submitting a payment; random or fabricated keys are rejected
-- **Conflict detection** — if a key is reused with a different request body, the gateway returns 409 with a clear error
-- **Race condition handling** — concurrent requests with the same key are serialised using `asyncio.Event`; the second request blocks and waits for the first to finish rather than starting a new payment
-- **Payment status endpoint** — clients can check whether a payment went through before deciding to retry
-- **24-hour TTL** — idempotency records expire automatically; expiry is checked eagerly on every read
-- **IP-based rate limiting** — sliding window of 10 requests per 60 seconds per client IP
-- **Structured audit logging** — every gateway event is written to `audit_log.json` in JSONL format for compliance and debugging
-- **CI pipeline** — GitHub Actions runs the full test suite on every push
+- **Exactly-once payment processing:** duplicate requests return the stored result without re-executing the payment
+- **System-generated idempotency keys:** clients must call `POST /generate-ticket` before submitting a payment. Random or fabricated keys are rejected
+- **Conflict detection:** if a key is reused with a different request body, the gateway returns 409 with a clear error
+- **Race condition handling:** concurrent requests with the same key are serialised using `asyncio.Event`. The second request blocks and waits for the first to finish rather than starting a new payment
+- **Payment status endpoint:** clients can check whether a payment went through before deciding to retry
+- **24-hour TTL:** idempotency records expire automatically. Expiry is checked eagerly on every read
+- **IP-based rate limiting:** sliding window of 10 requests per 60 seconds per client IP
+- **Structured audit logging:** every gateway event is written to `audit_log.json` in JSONL format for compliance and debugging
+- **CI pipeline:** GitHub Actions runs the full test suite on every push
 
 ---
 
@@ -98,7 +98,7 @@ Shows every decision the gateway makes when a `POST /process-payment` request ar
 | Technology | Purpose |
 |---|---|
 | Python 3.11+ | Runtime |
-| FastAPI | ASGI web framework — chosen for native `asyncio` support required for race condition handling |
+| FastAPI | ASGI web framework, chosen for native `asyncio` support required for race condition handling |
 | Pydantic v2 | Request and response validation with custom field validators |
 | Uvicorn | ASGI server |
 | asyncio.Event | Race condition synchronisation primitive |
@@ -197,7 +197,7 @@ Submits a payment request. Requires a valid ticket from `POST /generate-ticket` 
 | amount | float | Must be greater than zero |
 | currency | string | One of: `GHS`, `USD`, `EUR`, `GBP`, `NGN` (case-insensitive) |
 
-**Response: 201 Created** — first successful request
+**Response: 201 Created** (first successful request)
 ```json
 {
   "message": "Charged 100 GHS",
@@ -208,11 +208,11 @@ Submits a payment request. Requires a valid ticket from `POST /generate-ticket` 
 }
 ```
 
-**Response: 200 OK** — duplicate request (same key, same body)
+**Response: 200 OK** (duplicate request, same key and same body)
 
 Returns the exact same body as the first response, plus the header `X-Cache-Hit: true`. No payment is processed again.
 
-**Response: 409 Conflict** — same key, different body
+**Response: 409 Conflict** (same key, different body)
 ```json
 {
   "error": "Idempotency key already used for a different request body.",
@@ -220,7 +220,7 @@ Returns the exact same body as the first response, plus the header `X-Cache-Hit:
 }
 ```
 
-**Response: 400 Bad Request** — unrecognised or empty key
+**Response: 400 Bad Request** (unrecognised or empty key)
 ```json
 {
   "error": "Ticket not recognised. Generate a ticket first using POST /generate-ticket.",
@@ -228,7 +228,7 @@ Returns the exact same body as the first response, plus the header `X-Cache-Hit:
 }
 ```
 
-**Response: 422 Unprocessable Entity** — invalid payload or missing header
+**Response: 422 Unprocessable Entity** (invalid payload or missing header)
 
 Returned by FastAPI validation when the amount is zero or negative, the currency is unsupported, a required field is missing, or the `Idempotency-Key` header is absent entirely.
 
@@ -240,7 +240,7 @@ Returned by FastAPI validation when the amount is zero or negative, the currency
 }
 ```
 
-**Response: 503 Service Unavailable** — in-flight timeout
+**Response: 503 Service Unavailable** (in-flight timeout)
 ```json
 {
   "error": "The original request is taking too long.",
@@ -252,7 +252,7 @@ Returned by FastAPI validation when the amount is zero or negative, the currency
 
 ### GET /payment-status/{ticket_id}
 
-Returns the current status of a payment for a given ticket ID. This endpoint is the "check before retry" mechanism — after recovering from a crash, a client can call this first to see whether the payment already went through, and only retry if the status is not `COMPLETED`.
+Returns the current status of a payment for a given ticket ID. This is the check-before-retry mechanism. After recovering from a crash, a client can call this first to see whether the payment already went through, and only retry if the status is not `COMPLETED`.
 
 **Path Parameter**
 
@@ -260,7 +260,7 @@ Returns the current status of a payment for a given ticket ID. This endpoint is 
 |---|---|
 | ticket_id | The ticket ID returned by `POST /generate-ticket` |
 
-**Response: 200 OK** — ticket issued but payment not yet started
+**Response: 200 OK** (ticket issued but payment not yet started)
 ```json
 {
   "ticket_id": "order-a3f8b2",
@@ -269,7 +269,7 @@ Returns the current status of a payment for a given ticket ID. This endpoint is 
 }
 ```
 
-**Response: 200 OK** — payment is currently being processed
+**Response: 200 OK** (payment is currently being processed)
 ```json
 {
   "ticket_id": "order-a3f8b2",
@@ -279,7 +279,7 @@ Returns the current status of a payment for a given ticket ID. This endpoint is 
 }
 ```
 
-**Response: 200 OK** — payment completed
+**Response: 200 OK** (payment completed)
 ```json
 {
   "ticket_id": "order-a3f8b2",
@@ -296,7 +296,7 @@ Returns the current status of a payment for a given ticket ID. This endpoint is 
 }
 ```
 
-**Response: 404 Not Found** — ticket not recognised
+**Response: 404 Not Found** (ticket not recognised)
 ```json
 {
   "error": "No payment record found for this ticket ID."
@@ -322,9 +322,9 @@ Health check. Returns the service name and version.
 
 ## Example Requests
 
-The correct flow is always: **generate ticket → submit payment → check status if needed**.
+The correct flow is always: **generate ticket, submit payment, check status if needed**.
 
-### Step 1 — Generate a ticket
+### Step 1: Generate a ticket
 
 ```bash
 curl -X POST http://127.0.0.1:8000/generate-ticket
@@ -335,7 +335,7 @@ Response:
 { "ticket_id": "order-a3f8b2" }
 ```
 
-### Step 2 — Submit the payment
+### Step 2: Submit the payment
 
 ```bash
 curl -X POST http://127.0.0.1:8000/process-payment \
@@ -344,17 +344,17 @@ curl -X POST http://127.0.0.1:8000/process-payment \
   -d '{"amount": 100, "currency": "GHS"}'
 ```
 
-### Step 3 — Retry safely (duplicate)
+### Step 3: Retry safely (duplicate)
 
 Run the exact same command again. No new charge is made. The response is identical and includes `X-Cache-Hit: true`.
 
-### Step 4 — Check payment status
+### Step 4: Check payment status
 
 ```bash
 curl http://127.0.0.1:8000/payment-status/order-a3f8b2
 ```
 
-### Step 5 — Attempt a conflict
+### Step 5: Attempt a conflict
 
 ```bash
 curl -X POST http://127.0.0.1:8000/process-payment \
@@ -365,7 +365,7 @@ curl -X POST http://127.0.0.1:8000/process-payment \
 
 Response: `409 Conflict`
 
-### Step 6 — Use a fabricated key (rejected)
+### Step 6: Use a fabricated key (rejected)
 
 ```bash
 curl -X POST http://127.0.0.1:8000/process-payment \
@@ -382,7 +382,7 @@ Response: `400 Ticket not recognised. Generate a ticket first using POST /genera
 
 ### Why FastAPI?
 
-FastAPI is built on Starlette and runs on the ASGI protocol, meaning every request handler is a native Python coroutine running inside a single event loop. This was not a convenience choice — it was a requirement. The `asyncio.Event` race condition mechanism only works when all concurrent requests share the same event loop. FastAPI guarantees that, while a threaded framework like Flask would not.
+FastAPI is built on Starlette and runs on the ASGI protocol, meaning every request handler is a native Python coroutine running inside a single event loop. This was not a convenience choice; it was a requirement. The `asyncio.Event` race condition mechanism only works when all concurrent requests share the same event loop. FastAPI guarantees that, while a threaded framework like Flask would not.
 
 ### Race Condition: asyncio.Event over polling
 
@@ -412,11 +412,11 @@ Beyond the core acceptance criteria, IP-based rate limiting was implemented as t
 
 ### IP-Based Rate Limiting
 
-The gateway enforces a maximum of 10 requests per 60-second sliding window per client IP. This is implemented using a `collections.deque` per IP address — no Redis, no external dependency. The window slides continuously: on every request, timestamps older than 60 seconds are evicted from the front of the deque before the count is checked. This means the limit is always accurate to the current moment, unlike a fixed-window approach which can allow bursts at window boundaries.
+The gateway enforces a maximum of 10 requests per 60-second sliding window per client IP. This is implemented using a `collections.deque` per IP address, with no Redis or external dependency required. The window slides continuously: on every request, timestamps older than 60 seconds are evicted from the front of the deque before the count is checked. This means the limit is always accurate to the current moment, unlike a fixed-window approach which can allow bursts at window boundaries.
 
 **Why this matters in a real Fintech system:**
 
-Without rate limiting, a misbehaving client or an automated retry loop gone wrong could flood the idempotency store with thousands of unique keys per minute. This would exhaust memory, slow down legitimate lookups, and bury audit logs in noise — making it impossible to investigate actual payment anomalies.
+Without rate limiting, a misbehaving client or an automated retry loop gone wrong could flood the idempotency store with thousands of unique keys per minute. This would exhaust memory, slow down legitimate lookups, and bury audit logs in noise, making it impossible to investigate actual payment anomalies.
 
 ### Structured Audit Logging
 
@@ -444,7 +444,7 @@ In a real Fintech environment this log can be streamed directly into Datadog, Sp
 
 ## Testing Strategy
 
-The test suite contains **37 tests** covering every scenario and edge case. Tests are written with `pytest-asyncio` and `httpx` against the live FastAPI application — no mocking.
+The test suite contains **37 tests** covering every scenario and edge case. Tests are written with `pytest-asyncio` and `httpx` against the live FastAPI application, with no mocking.
 
 ```bash
 pytest tests/ -v
@@ -475,17 +475,17 @@ GitHub Actions runs the full suite automatically on every push to any branch. Co
 ```
 Idempotency-Gateway/
 ├── app/
-│   ├── __init__.py         — package marker
-│   ├── main.py             — FastAPI app, lifespan context manager, CORS, background cleanup
-│   ├── routes.py           — all endpoint handlers (generate-ticket, process-payment, payment-status)
-│   ├── storage.py          — idempotency store with TTL expiry and asyncio.Event race condition handling
-│   ├── ticket_store.py     — system-issued key registry with 30-minute TTL and IP-based invalidation
-│   ├── models.py           — Pydantic request and response models with field validators
-│   ├── logger.py           — structured JSONL audit logger (stdout + audit_log.json)
-│   └── rate_limiter.py     — sliding-window IP rate limiter using collections.deque
+│   ├── __init__.py         (package marker)
+│   ├── main.py             (FastAPI app, lifespan context manager, CORS, background cleanup)
+│   ├── routes.py           (all endpoint handlers: generate-ticket, process-payment, payment-status)
+│   ├── storage.py          (idempotency store with TTL expiry and asyncio.Event race condition handling)
+│   ├── ticket_store.py     (system-issued key registry with 30-minute TTL and IP-based invalidation)
+│   ├── models.py           (Pydantic request and response models with field validators)
+│   ├── logger.py           (structured JSONL audit logger for stdout and audit_log.json)
+│   └── rate_limiter.py     (sliding-window IP rate limiter using collections.deque)
 ├── tests/
 │   ├── __init__.py
-│   └── test_payment.py     — 37 async tests across 9 test classes
+│   └── test_payment.py     (37 async tests across 9 test classes)
 ├── docs/
 │   ├── architecture_diagram.md
 │   ├── sequence_diagram.md
@@ -496,7 +496,7 @@ Idempotency-Gateway/
 │   └── Decision Flowchart.drawio.svg
 ├── .github/
 │   └── workflows/
-│       └── ci.yml          — GitHub Actions CI pipeline
+│       └── ci.yml          (GitHub Actions CI pipeline)
 ├── requirements.txt
 ├── pytest.ini
 └── .gitignore
@@ -507,9 +507,9 @@ Idempotency-Gateway/
 ## Known Limitations
 
 - **No persistence across restarts.** The in-memory store is cleared when the server stops. A production deployment would use Redis with atomic `SET NX` and native TTL support.
-- **Single-process only.** Rate limiting and idempotency state are not shared across multiple server instances. Horizontal scaling requires a centralised store (Redis, DynamoDB).
-- **No lock beyond asyncio.** The store is safe under asyncio's cooperative multitasking model but is not protected against true concurrent writes. This is acceptable for a single-process ASGI server but would require explicit locking or Redis transactions in a multi-threaded deployment.
-- **Simulated payment processor.** The 2-second delay is a `asyncio.sleep` call. A real implementation would call an external payment gateway and handle its own failure modes.
+- **Single-process only.** Rate limiting and idempotency state are not shared across multiple server instances. Horizontal scaling requires a centralised store such as Redis or DynamoDB.
+- **No explicit lock beyond asyncio.** The store is safe under asyncio's cooperative multitasking model but is not protected against true concurrent writes. This is acceptable for a single-process ASGI server but would require explicit locking or Redis transactions in a multi-threaded deployment.
+- **Simulated payment processor.** The 2-second delay is an `asyncio.sleep` call. A real implementation would call an external payment gateway and handle its own failure modes.
 
 ---
 
