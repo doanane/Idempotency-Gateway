@@ -6,60 +6,31 @@ A production-grade payment idempotency layer built with FastAPI. Guarantees that
 
 ## Architecture Diagram
 
-The gateway handles five distinct scenarios. The diagram below shows the full request lifecycle for each.
+Shows all gateway components and how they connect — from the client generating a ticket through to payment processing and audit logging.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client
-    participant Gateway as Idempotency Gateway
-    participant Store as In-Memory Store
-    participant Payment as Payment Processor
+![Architecture Diagram](<images/Architecture Diagram.png>)
 
-    note over Client,Payment: Scenario 1 — First Request (Happy Path)
-    Client->>Gateway: POST /process-payment\nIdempotency-Key: key-abc\n{"amount": 100, "currency": "GHS"}
-    Gateway->>Store: get(key-abc)
-    Store-->>Gateway: null (not found)
-    Gateway->>Store: mark_processing(key-abc, body_hash)
-    Gateway->>Payment: simulate processing (2s delay)
-    Payment-->>Gateway: transaction result
-    Gateway->>Store: mark_completed(key-abc, response)
-    Gateway-->>Client: 201 Created\n{"message": "Charged 100 GHS", ...}
+> Full diagram with component descriptions: [docs/architecture_diagram.md](docs/architecture_diagram.md)
 
-    note over Client,Payment: Scenario 2 — Duplicate Request (Idempotency)
-    Client->>Gateway: POST /process-payment\nIdempotency-Key: key-abc\n{"amount": 100, "currency": "GHS"}
-    Gateway->>Store: get(key-abc)
-    Store-->>Gateway: record (COMPLETED, hash matches)
-    Gateway-->>Client: 200 OK\n(same response body)\nX-Cache-Hit: true
+---
 
-    note over Client,Payment: Scenario 3 — Conflict (Different Body, Same Key)
-    Client->>Gateway: POST /process-payment\nIdempotency-Key: key-abc\n{"amount": 500, "currency": "GHS"}
-    Gateway->>Store: get(key-abc)
-    Store-->>Gateway: record (hash mismatch)
-    Gateway-->>Client: 409 Conflict\n"Idempotency key already used for a different request body."
+## Sequence Diagram
 
-    note over Client,Payment: Scenario 4 — Race Condition (Two Simultaneous Requests)
-    par Request A
-        Client->>Gateway: POST /process-payment\nIdempotency-Key: key-xyz
-        Gateway->>Store: get(key-xyz) → null
-        Gateway->>Store: mark_processing(key-xyz)
-        Gateway->>Payment: simulate processing (2s delay)
-    and Request B
-        Client->>Gateway: POST /process-payment\nIdempotency-Key: key-xyz
-        Gateway->>Store: get(key-xyz) → PROCESSING
-        Gateway->>Store: get_event(key-xyz)
-        Store-->>Gateway: asyncio.Event (waiting...)
-    end
-    Payment-->>Gateway: transaction result
-    Gateway->>Store: mark_completed(key-xyz) → event.set()
-    Store-->>Gateway: event fired (Request B unblocked)
-    Gateway-->>Client: 201 Created (Request A)
-    Gateway-->>Client: 200 OK, X-Cache-Hit: true (Request B)
+Shows the full request lifecycle across all five scenarios: first payment, duplicate, conflict, race condition, and rate limit.
 
-    note over Client,Payment: Scenario 5 — Rate Limit Exceeded
-    Client->>Gateway: POST /process-payment (11th request within 60s)
-    Gateway-->>Client: 429 Too Many Requests
-```
+![Sequence Diagram](<images/Sequence Diagram.webp>)
+
+> Full diagram with Mermaid source: [docs/sequence_diagram.md](docs/sequence_diagram.md)
+
+---
+
+## Decision Flowchart
+
+Shows every decision the gateway makes when a `POST /process-payment` request arrives, from rate limit check down to returning the cached response.
+
+![Decision Flowchart](<images/Decision Flowchart.drawio.svg>)
+
+> Full diagram with decision table: [docs/decision_flowchart.md](docs/decision_flowchart.md)
 
 ---
 
@@ -261,7 +232,13 @@ Idempotency-Gateway/
 │   ├── __init__.py
 │   └── test_payment.py  - Full test suite (happy path, duplicates, conflicts, race conditions)
 ├── docs/
-│   └── sequence_diagram.md
+│   ├── architecture_diagram.md
+│   ├── sequence_diagram.md
+│   └── decision_flowchart.md
+├── images/
+│   ├── Architecture Diagram.png
+│   ├── Sequence Diagram.webp
+│   └── Decision Flowchart.drawio.svg
 ├── requirements.txt
 ├── pytest.ini
 └── .gitignore
