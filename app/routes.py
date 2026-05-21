@@ -15,6 +15,7 @@ from app.logger import (
     EVENT_STATUS_CHECKED,
     EVENT_TICKET_GENERATED,
     EVENT_TICKET_INVALID,
+    read_logs,
     write_log,
 )
 from app.models import ErrorResponse, PaymentRequest, PaymentResponse
@@ -47,6 +48,15 @@ async def health_check() -> dict:
         "status": "healthy",
         "version": "1.0.0",
     }
+
+
+@router.get("/logs")
+async def get_logs(limit: int | None = None) -> JSONResponse:
+    entries = read_logs(limit=limit)
+    return JSONResponse(
+        status_code=200,
+        content={"total": len(entries), "logs": entries},
+    )
 
 
 @router.post("/generate-ticket", status_code=201)

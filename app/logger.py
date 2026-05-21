@@ -28,6 +28,19 @@ if not _console_logger.handlers:
     _console_logger.addHandler(_handler)
 
 
+def read_logs(limit: int | None = None) -> list[dict]:
+    if not AUDIT_LOG_FILE.exists():
+        return []
+    try:
+        lines = AUDIT_LOG_FILE.read_text(encoding="utf-8").splitlines()
+        entries = [json.loads(line) for line in lines if line.strip()]
+        if limit is not None:
+            entries = entries[-limit:]
+        return entries
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
 def write_log(
     event: str,
     idempotency_key: str,
