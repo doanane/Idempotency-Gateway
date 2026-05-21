@@ -14,6 +14,7 @@ When a payment request is sent and the network drops before the response arrives
 ## Table of Contents
 
 - [Overview](#overview)
+- [Real-World Scenario: Jumia x Hubtel on Black Friday](#real-world-scenario-jumia-x-hubtel-on-black-friday)
 - [Diagrams and Flow](#diagrams-and-flow)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
@@ -44,6 +45,64 @@ The implementation covers five distinct scenarios:
 | Conflict | Same key used with a different body, rejected with 409 |
 | Race condition | Two identical requests arrive simultaneously. The second one waits and gets the same result |
 | Rate limit | More than 10 requests per 60 seconds from one IP, rejected with 429 |
+
+---
+
+## Real-World Scenario: Jumia x Hubtel on Black Friday
+
+To understand why this gateway exists, it helps to ground the problem in something real.
+
+### Understanding the Two Sides: Payment Service vs Payment Gateway
+
+Before the scenario, it is important to understand the difference between two terms that people often confuse.
+
+A **payment service** is the application that initiates the payment request. It belongs to the merchant or platform. In this case, that is Jumia's checkout backend. When a customer clicks "Pay Now", Jumia's payment service is the system that decides what to charge, builds the payment request, and sends it forward.
+
+A **payment gateway** is the intermediary that actually processes the transaction. It sits between the merchant and the financial networks, such as banks, mobile money providers, and card schemes. In Ghana, Hubtel is a major payment gateway. When Jumia wants to charge a customer via MTN Mobile Money, Jumia's payment service sends the request to Hubtel, and Hubtel handles the communication with MTN's infrastructure and returns a success or failure response.
+
+Examples of payment gateways you may know: Hubtel, Paystack, Flutterwave, Stripe, PayPal. Examples of payment services built on top of them: Jumia Checkout, Bolt's ride payment backend, a bank's USSD transfer system.
+
+The key point is that the payment service owns the business logic and the payment gateway owns the transaction execution. The idempotency layer sits inside the payment service, before the request ever reaches the gateway.
+
+---
+
+### The Black Friday Problem
+
+It is Black Friday in Ghana. Jumia has just launched a flash sale. Thousands of customers are checking out at the same time, many of them paying with MTN Mobile Money through Hubtel.
+
+A customer in Accra adds three items to their cart, totalling GHS 450, and taps "Pay Now". Jumia's payment service sends a charge request to Hubtel. Hubtel begins processing. The payment takes a moment to go through because MTN's servers are under load from the same Black Friday traffic. Three seconds pass. The customer's mobile browser times out waiting for a response and shows an error page.
+
+The customer thinks the payment failed. They tap "Pay Now" again.
+
+Meanwhile, Hubtel had already processed the first request. GHS 450 was deducted from the customer's MoMo wallet the first time. The second tap triggers a second request, and without any protection in place, Hubtel charges another GHS 450.
+
+The customer is now charged GHS 900 for one order. They call customer support. Jumia has to investigate, issue a refund, and absorb the transaction fees on both sides. Multiply this by hundreds of customers hitting the same timeout during a flash sale and the damage, both financial and reputational, becomes serious.
+
+This is not a hypothetical. It is one of the most documented failure modes in payment engineering, and it is entirely preventable.
+
+---
+
+### How the Idempotency Gateway Solves It
+
+Before the customer ever reaches checkout, Jumia's payment service calls `POST /generate-ticket`. The gateway returns a unique, server-generated key, for example `order-a3f8b2`. This key is attached to the customer's checkout session.
+
+When the customer taps "Pay Now", the payment service sends the GHS 450 charge request to the gateway with `Idempotency-Key: order-a3f8b2`. The gateway processes the payment, records the result against that key, and returns a 201 response.
+
+The browser times out before receiving that 201. The customer taps "Pay Now" again. This time, the payment service retries using the same key `order-a3f8b2` with the same amount. The gateway receives the request, looks up the key, finds a completed record, and returns the original 201 response instantly. No second charge. No call to Hubtel. No new transaction.
+
+The customer sees "Payment successful." Jumia's books show one transaction. The customer's wallet shows one deduction. Everyone is correct.
+
+If the customer's device somehow submitted a different amount on the retry, perhaps due to a UI bug or a corrupted session, the gateway detects the body mismatch and returns 409 Conflict, blocking the conflicting request entirely rather than silently processing a wrong amount.
+
+If Jumia's payment service crashed mid-request and needs to check whether the first attempt went through before retrying, it calls `GET /payment-status/order-a3f8b2`. The gateway responds with `COMPLETED` and the full payment details. The service knows not to retry. This is the check-before-retry pattern.
+
+---
+
+### Why This Matters at Scale
+
+On a normal day, double charges are a minor inconvenience. On Black Friday, when request volumes spike and network conditions degrade, every timeout becomes a potential duplicate. Without an idempotency layer, the safest thing a client can do is not retry, which means legitimate failed payments are abandoned and the business loses revenue. With an idempotency layer, clients can retry freely and aggressively, because the gateway guarantees that no matter how many times a request is replayed, the payment is executed exactly once.
+
+That is the core proposition of this project: **safe retries, zero double charges.**
 
 ---
 
