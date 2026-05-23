@@ -88,7 +88,7 @@ async def get_payment_status(ticket_id: str, request: Request) -> JSONResponse:
     client_ip = _get_client_ip(request)
     write_log(EVENT_STATUS_CHECKED, ticket_id, client_ip)
 
-    record = store.get(ticket_id)
+    record = await store.get(ticket_id)
 
     if record is not None:
         response_data: dict = {
@@ -157,7 +157,7 @@ async def process_payment(
         return JSONResponse(status_code=400, content=error.model_dump())
 
     incoming_hash = store.hash_body(body.model_dump())
-    record = store.get(idempotency_key)
+    record = await store.get(idempotency_key)
 
     if record is not None:
         if record.body_hash != incoming_hash:
@@ -187,7 +187,7 @@ async def process_payment(
                     )
                     return JSONResponse(status_code=503, content=error.model_dump())
 
-            record = store.get(idempotency_key)
+            record = await store.get(idempotency_key)
 
         write_log(EVENT_DUPLICATE_DETECTED, idempotency_key, client_ip)
         return JSONResponse(
@@ -196,7 +196,32 @@ async def process_payment(
             headers={"X-Cache-Hit": "true"},
         )
 
-    event = store.mark_processing(idempotency_key, incoming_hash)
+    event = await store.mark_processing(idempotency_key, incoming_hash)
+
+    if event is None:
+        # SET NX failed: a concurrent request claimed this key between our
+        # store.get() returning None and our mark_processing() call.
+        # Wait for that request to finish, then return its cached response.
+        write_log(EVENT_INFLIGHT_WAIT, idempotency_key, client_ip)
+        inflight_event = store.get_event(idempotency_key)
+        if inflight_event is not None:
+            try:
+                await asyncio.wait_for(inflight_event.wait(), timeout=INFLIGHT_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                write_log(EVENT_INFLIGHT_TIMEOUT, idempotency_key, client_ip)
+                error = ErrorResponse(
+                    error="The original request is taking too long.",
+                    hint="Please retry after a moment.",
+                )
+                return JSONResponse(status_code=503, content=error.model_dump())
+        record = await store.get(idempotency_key)
+        write_log(EVENT_DUPLICATE_DETECTED, idempotency_key, client_ip)
+        return JSONResponse(
+            status_code=200,
+            content=record.response,
+            headers={"X-Cache-Hit": "true"},
+        )
+
     ticket_store.mark_used(idempotency_key)
 
     await asyncio.sleep(PROCESSING_DELAY_SECONDS)
@@ -214,7 +239,7 @@ async def process_payment(
     )
 
     response_dict = payment_response.model_dump()
-    store.mark_completed(idempotency_key, response_dict)
+    await store.mark_completed(idempotency_key, response_dict)
 
     write_log(
         EVENT_PAYMENT_PROCESSED,

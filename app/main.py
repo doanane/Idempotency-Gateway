@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,12 +14,13 @@ from app.ticket_store import ticket_store
 logger = logging.getLogger("idempotency_gateway")
 
 CLEANUP_INTERVAL_SECONDS = 3600
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
 async def _cleanup_loop() -> None:
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-        expired_count = store.cleanup_expired()
+        expired_count = await store.cleanup_expired()
         stale_ip_count = rate_limiter.cleanup_stale_ips()
         expired_ticket_count = ticket_store.cleanup_expired()
         logger.info(
@@ -31,14 +33,19 @@ async def _cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    store.connect(REDIS_URL)
     cleanup_task = asyncio.create_task(_cleanup_loop())
-    logger.info("Idempotency Gateway started. Background cleanup scheduled every %ds.", CLEANUP_INTERVAL_SECONDS)
+    logger.info(
+        "Idempotency Gateway started. Redis connected. Background cleanup scheduled every %ds.",
+        CLEANUP_INTERVAL_SECONDS,
+    )
     yield
     cleanup_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
         pass
+    await store.close()
     logger.info("Idempotency Gateway shut down.")
 
 

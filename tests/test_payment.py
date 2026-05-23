@@ -1,27 +1,40 @@
 import asyncio
 
 import pytest_asyncio
+import redis.asyncio as aioredis
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.rate_limiter import rate_limiter
-from app.storage import store
+from app.storage import REDIS_KEY_PREFIX, store
 from app.ticket_store import ticket_store
+
+
+REDIS_URL = "redis://localhost:6379"
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def reset_state():
-    store._records.clear()
+    # Create a fresh connection on this test's event loop.
+    # Each pytest-asyncio test runs in its own loop, so the previous
+    # connection (bound to the prior loop) must be replaced.
+    store._redis = None
+    store.connect(REDIS_URL)
+    test_redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+    async for key in test_redis.scan_iter(f"{REDIS_KEY_PREFIX}*"):
+        await test_redis.delete(key)
     store._events.clear()
     rate_limiter._windows.clear()
     ticket_store._tickets.clear()
     ticket_store._pending_per_ip.clear()
     yield
-    store._records.clear()
+    async for key in test_redis.scan_iter(f"{REDIS_KEY_PREFIX}*"):
+        await test_redis.delete(key)
     store._events.clear()
     rate_limiter._windows.clear()
     ticket_store._tickets.clear()
     ticket_store._pending_per_ip.clear()
+    await test_redis.aclose()
 
 
 @pytest_asyncio.fixture
