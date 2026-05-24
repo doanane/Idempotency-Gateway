@@ -160,6 +160,7 @@ Shows every decision the gateway makes when a `POST /process-payment` request ar
 | FastAPI | ASGI web framework, chosen for native `asyncio` support required for race condition handling |
 | Pydantic v2 | Request and response validation with custom field validators |
 | Uvicorn | ASGI server |
+| Redis (redis[asyncio]) | Idempotency store backend — persistent key-value store with atomic `SET NX` and native 24-hour TTL |
 | asyncio.Event | Race condition synchronisation primitive |
 | hashlib SHA-256 | Deterministic body hashing for payload comparison |
 | pytest + pytest-asyncio | Async test suite |
@@ -174,6 +175,7 @@ Shows every decision the gateway makes when a `POST /process-payment` request ar
 
 - Python 3.11 or higher
 - pip
+- Redis server running locally (`redis://localhost:6379`). Install via `sudo apt install redis-server` on Linux, `brew install redis` on macOS, or download from [redis.io](https://redis.io/download) on Windows.
 
 ### Installation
 
@@ -455,9 +457,9 @@ Allowing clients to use arbitrary strings as idempotency keys creates a risk: tw
 
 Payload comparison uses SHA-256 of the JSON-serialised body with `sort_keys=True`. This ensures that `{"amount": 100, "currency": "GHS"}` and `{"currency": "GHS", "amount": 100}` are treated as identical payloads, which is the correct semantic behaviour. Key order in JSON is arbitrary and should not affect idempotency.
 
-### In-Memory Store
+### Redis-Backed Idempotency Store
 
-The store is a plain Python dictionary. It is simple, has no network overhead, and requires no infrastructure. The trade-off is that state is lost on server restart and cannot be shared across multiple processes. In a production deployment, this would be replaced with Redis, which provides atomic `SET NX` operations, distributed locking, and native TTL management.
+The idempotency store uses Redis as its backend via the `redis[asyncio]` client. Each payment record is serialised to JSON and stored under a namespaced key (`idempotency:<ticket_id>`) with a 24-hour TTL managed natively by Redis. The initial claim uses Redis `SET NX` (set-if-not-exists), which is an atomic operation — it guarantees that only one concurrent request can claim a key even under simultaneous arrival. There is no application-level lock. `asyncio.Event` objects, which are Python runtime objects that cannot be serialised, are held in a separate in-process dictionary and coordinate waiting requests within the same server process. This hybrid design gives persistence and atomicity from Redis while keeping the race-condition signalling lightweight and zero-latency.
 
 ### 24-Hour TTL with Background Cleanup
 
@@ -565,10 +567,9 @@ Idempotency-Gateway/
 
 ## Known Limitations
 
-- **No persistence across restarts.** The in-memory store is cleared when the server stops. A production deployment would use Redis with atomic `SET NX` and native TTL support.
-- **Single-process only.** Rate limiting and idempotency state are not shared across multiple server instances. Horizontal scaling requires a centralised store such as Redis or DynamoDB.
-- **No explicit lock beyond asyncio.** The store is safe under asyncio's cooperative multitasking model but is not protected against true concurrent writes. This is acceptable for a single-process ASGI server but would require explicit locking or Redis transactions in a multi-threaded deployment.
-- **Simulated payment processor.** The 2-second delay is an `asyncio.sleep` call. A real implementation would call an external payment gateway and handle its own failure modes.
+- **Rate limiter is not shared across server instances.** Idempotency records are persisted in Redis and survive restarts. However, the IP-based rate limiter uses an in-process `collections.deque` per IP. If two server instances run behind a load balancer, each has its own counter and the effective rate limit doubles. A production deployment would move the rate limiter counter to Redis using `INCR` and `EXPIRE`.
+- **asyncio.Event is in-process only.** The race condition handler uses `asyncio.Event` objects stored in Python memory. These coordinate concurrent requests within one server process. Across two server instances, a duplicate arriving at a different instance would not find the in-flight event. This is acceptable for single-process deployment; multi-process coordination would require a Redis-based distributed lock or a pub/sub signal.
+- **Simulated payment processor.** The 2-second delay is an `asyncio.sleep` call. A real implementation would call an external payment gateway such as Hubtel or Paystack and handle its specific failure modes, timeouts, and partial-success responses.
 
 ---
 
@@ -578,4 +579,4 @@ This project implements a complete idempotency gateway for a payment processing 
 
 Beyond the core requirements, the gateway adds a ticket enforcement system that prevents arbitrary keys from being used, a race condition handler that serialises simultaneous duplicate requests without polling, a payment status endpoint that gives clients a safe way to check before retrying, and a structured audit log that records every gateway decision for compliance and debugging.
 
-The system is built on FastAPI for its native asyncio support, fully tested with 37 passing tests, and automated with a GitHub Actions CI pipeline.
+The system is built on FastAPI for its native asyncio support, backed by Redis for persistent and atomic idempotency storage, fully tested with 37 passing tests, and automated with a GitHub Actions CI pipeline that provisions a live Redis instance for every test run.
